@@ -1,0 +1,13 @@
+.venv/
+.env
+*.pyc
+__pycache__/
+*.egg-info/
+.eggs/
+dist/
+build/
+*.egg
+.idea/
+.vscode/
+.DS_Store
+uv.lock
