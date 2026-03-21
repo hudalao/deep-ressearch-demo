@@ -11,3 +11,13 @@ build/
 .vscode/
 .DS_Store
 uv.lock
+
+# LangGraph runtime state
+.langgraph_api/
+
+# Research output (runtime generated)
+# research_agent/
+research_agent_backup_*/
+
+# Logs
+langgraph_dev.log

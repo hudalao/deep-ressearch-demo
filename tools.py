@@ -10,7 +10,35 @@ from markdownify import markdownify
 from tavily import TavilyClient
 from typing_extensions import Annotated, Literal
 
-tavily_client = TavilyClient()
+# Token 估算：中文1字≈1token，英文1词≈1.3token
+def estimate_tokens(text: str) -> int:
+    """估算文本的 token 数量。
+
+    Args:
+        text: 要估算的文本
+
+    Returns:
+        估算的 token 数量
+    """
+    # 简单估算：中文按字符数，英文按单词数 * 1.3
+    chinese_chars = sum(1 for c in text if '\u4e00' <= c <= '\u9fff')
+    english_words = sum(1 for w in text.split() if w.isascii())
+    other_chars = len(text) - chinese_chars - sum(len(w) for w in text.split() if w.isascii())
+
+    return int(chinese_chars + english_words * 1.3 + other_chars * 0.4)
+
+# Lazy initialization of tavily_client
+_tavily_client = None
+
+def _get_tavily_client():
+    global _tavily_client
+    if _tavily_client is None:
+        # Bypass proxy for Tavily API
+        import os
+        os.environ['NO_PROXY'] = 'api.tavily.com'
+        os.environ['no_proxy'] = 'api.tavily.com'
+        _tavily_client = TavilyClient()
+    return _tavily_client
 
 
 def fetch_webpage_content(url: str, timeout: float = 10.0) -> str:
@@ -56,7 +84,7 @@ def tavily_search(
     Returns:
         包含完整网页内容的格式化搜索结果
     """
-    search_results = tavily_client.search(
+    search_results = _get_tavily_client().search(
         query,
         max_results=max_results,
         topic=topic,
@@ -86,6 +114,46 @@ def tavily_search(
 
 
 @tool(parse_docstring=True)
+def log_warning(message: Annotated[str, "警告消息"]) -> str:
+    """记录警告日志。
+
+    当输入过大需要跳过某些步骤时使用。
+
+    Args:
+        message: 警告消息内容
+
+    Returns:
+        确认日志已记录
+    """
+    import datetime
+    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    log_entry = f"[{timestamp}] [WARN] {message}"
+    print(log_entry, flush=True)
+    return f"警告已记录: {message}"
+
+
+@tool(parse_docstring=True)
+def estimate_tokens_tool(text: Annotated[str, "要估算的文本"]) -> str:
+    """估算文本的 token 数量。
+
+    用于在调用子代理前检查输入大小，避免上下文溢出。
+
+    规则：
+    - 中文：1字符 ≈ 1 token
+    - 英文：1单词 ≈ 1.3 tokens
+    - 标点/空格：0.4 tokens
+
+    Args:
+        text: 要估算的文本
+
+    Returns:
+        估算的 token 数量
+    """
+    count = estimate_tokens(text)
+    return f"估算 token 数: {count}"
+
+
+@tool(parse_docstring=True)
 def think_tool(reflection: str) -> str:
     """用于研究进展和决策的战略反思工具。
 
@@ -111,3 +179,58 @@ def think_tool(reflection: str) -> str:
         确认反思已被记录以供决策使用
     """
     return f"反思已记录: {reflection}"
+
+
+@tool(parse_docstring=True)
+def log_agent_io(
+    agent_name: Annotated[str, "子代理名称（如 evidence, exploration, write 等）"],
+    input_data: Annotated[str, "输入给子代理的任务描述或数据"],
+    output_data: Annotated[str, "子代理的输出或响应"],
+    stage: Annotated[str, "当前阶段（如 task_start, task_complete, tool_call 等）"] = "info",
+) -> str:
+    """记录子代理的输入和输出，用于调试和追踪工作流。
+
+    在 sub-agent 被调用时记录输入，完成时记录输出。
+    这使得工作流的每个步骤都可追踪和可视化。
+
+    Args:
+        agent_name: 子代理名称（evidence, exploration, data-analysis, outline, write, review）
+        input_data: 输入给子代理的任务描述或数据
+        output_data: 子代理的输出或响应
+        stage: 阶段标识 - 'task_start'（任务开始）, 'task_complete'（任务完成）, 'tool_call'（工具调用）
+
+    Returns:
+        确认日志已写入
+    """
+    import datetime
+    import os
+
+    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+
+    # 构建日志目录
+    log_dir = os.path.join(os.path.dirname(__file__), "research_agent", "logs")
+    os.makedirs(log_dir, exist_ok=True)
+
+    # 写入按时间排序的详细日志
+    log_file = os.path.join(log_dir, "agent_io.log")
+    with open(log_file, "a", encoding="utf-8") as f:
+        f.write(f"\n{'='*80}\n")
+        f.write(f"[{timestamp}] [{stage.upper()}] {agent_name}\n")
+        f.write(f"{'='*80}\n")
+        f.write(f"--- INPUT ---\n{input_data}\n")
+        f.write(f"\n--- OUTPUT ---\n{output_data}\n")
+        f.write(f"\n")
+
+    # 写入按 agent 分类的日志
+    agent_log_file = os.path.join(log_dir, f"{agent_name}.log")
+    with open(agent_log_file, "a", encoding="utf-8") as f:
+        f.write(f"\n[{timestamp}] [{stage.upper()}]\n")
+        f.write(f"INPUT:\n{input_data[:500]}..." if len(input_data) > 500 else f"INPUT:\n{input_data}\n")
+        f.write(f"\nOUTPUT:\n{output_data[:500]}..." if len(output_data) > 500 else f"\nOUTPUT:\n{output_data}\n")
+        f.write(f"\n{'-'*40}\n")
+
+    # 控制台也输出
+    print(f"[{timestamp}] [{agent_name}] {stage.upper()}", flush=True)
+    print(f"  INPUT: {input_data[:200]}..." if len(input_data) > 200 else f"  INPUT: {input_data}", flush=True)
+
+    return f"日志已写入: {agent_name}.log"
