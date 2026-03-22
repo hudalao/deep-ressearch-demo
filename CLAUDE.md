@@ -24,11 +24,10 @@ cp .env.example .env
 ```
 
 Required keys in `.env`:
-- `ANTHROPIC_API_KEY` - Anthropic API Key (required for Anthropic models)
+- `ANTHROPIC_API_KEY` - Currently used for MiniMax API (configure base URL in agent.py)
 - `TAVILY_API_KEY` - Tavily API Key (required, for web search - get one at https://app.tavily.com)
 - `GOOGLE_API_KEY` - Google API Key (optional, for Gemini model)
 - `LANGSMITH_API_KEY` - LangSmith API Key (optional, for tracing)
-- `ANTHROPIC_API_KEY` - Also used for MiniMax (set base URL separately if needed)
 
 ### 3. Install langgraph-cli (for local dev server)
 
@@ -50,12 +49,14 @@ langgraph dev
 
 Server starts at `http://localhost:5433` with LangGraph Studio UI.
 
-### Option 2: Jupyter Notebook
+### Option 2: Direct Python Script
 
 ```bash
 source .venv/bin/activate
-uv run jupyter notebook research_agent.ipynb
+uv run python run_query.py
 ```
+
+Note: Uses `agent.invoke()` mode for compatibility with MiniMax API.
 
 ## Project Structure
 
@@ -85,10 +86,26 @@ deep-research-demo/
 
 ### Change Model
 
-Edit `agent.py` and modify the `init_chat_model` call:
+Current configuration uses **MiniMax-M2.5** (200K context) via OpenAI-compatible API.
+
+To switch models, edit `agent.py` and modify the model initialization:
 
 ```python
-model = init_chat_model(model="anthropic:claude-sonnet-4-5-20250929", temperature=0.0)
+# Current: MiniMax via OpenAI-compatible API
+model = ChatOpenAI(
+    model="MiniMax-M2.5",
+    api_key=os.environ.get("ANTHROPIC_API_KEY"),
+    base_url="https://api.minimaxi.com/v1",
+    temperature=0.0,
+)
+
+# Alternative: Use Anthropic Claude
+# from langchain_anthropic import ChatAnthropic
+# model = ChatAnthropic(model="claude-sonnet-4-5-20250929", temperature=0.0)
+
+# Alternative: Use OpenAI
+# from langchain_openai import ChatOpenAI
+# model = ChatOpenAI(model="gpt-4o", temperature=0.0)
 ```
 
 ### Custom Model Providers
@@ -184,3 +201,84 @@ Edit [prompts.py](prompts.py) - all sub-agent instructions are defined there.
 ### Add Custom Tools
 
 Add new tools in [tools.py](tools.py) and import them in `agent.py`.
+
+### Hyperparameters Configuration
+
+Key configuration parameters in `agent.py`:
+
+```python
+max_outline_iterations = 3      # Maximum outline-review iterations
+max_researcher_iterations = 3   # Maximum search iterations per researcher
+enable_review = False           # Enable/disable review step (default: disabled)
+```
+
+When `enable_review=False` (default), the workflow skips the review step to reduce iteration overhead. Outline goes directly to report writing.
+
+## Architecture
+
+### Multi-Agent Workflow
+
+The system uses an Orchestrator pattern with 6 specialized sub-agents:
+
+```
+                    ┌─→ evidence (parallel) ──┐
+                    │                          │
+                    └─→ exploration (parallel) ┘
+                                │
+                                ↓
+                        data-analysis
+                                │
+                                ↓
+                            outline
+                                │
+                                ↓ (if enable_review=True)
+                            review ←──┐
+                                │      │ (max 3 iterations)
+                                └──────┘
+                                │
+                                ↓
+                            write
+                                │
+                                ↓
+                        final_report.md
+```
+
+### Sub-Agent Responsibilities
+
+- **Orchestrator**: Coordinates workflow, calls sub-agents via `task()` tool
+- **evidence**: Web search and information retrieval (uses Tavily)
+- **exploration**: Generates innovative insights and novel perspectives
+- **data-analysis**: Synthesizes and categorizes research findings
+- **outline**: Creates structured report outline
+- **review**: Validates outline-evidence consistency (optional, disabled by default)
+- **write**: Generates final report with proper citations
+
+### Context Passing
+
+Agents communicate through filesystem:
+1. Orchestrator calls sub-agent via `task()`
+2. Sub-agent writes results to files (e.g., `/evidence/search_results.md`)
+3. Downstream agents read via `read_file` tool
+4. All outputs stored in `research_agent/` directory
+
+## Development Commands
+
+### Run Linting
+
+```bash
+source .venv/bin/activate
+uv run ruff check .
+```
+
+### Run Type Checking
+
+```bash
+source .venv/bin/activate
+uv run mypy .
+```
+
+### Install Development Dependencies
+
+```bash
+uv sync --extra dev
+```
