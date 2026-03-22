@@ -39,7 +39,7 @@ from tools import tavily_search, think_tool, estimate_tokens_tool, log_warning, 
 # 超参数
 max_outline_iterations = 3
 max_researcher_iterations = 3
-enable_review = False  # 默认关闭 review，减少迭代开销
+enable_review = False  # 保持禁用独立 review 子代理，Orchestrator 会在每个阶段实时检查质量
 
 # 获取当前日期
 current_date = datetime.now().strftime("%Y-%m-%d")
