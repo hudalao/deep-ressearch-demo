@@ -207,59 +207,111 @@ Add new tools in [tools.py](tools.py) and import them in `agent.py`.
 Key configuration parameters in `agent.py`:
 
 ```python
-max_outline_iterations = 3      # Maximum outline-review iterations
+max_outline_iterations = 3      # Maximum outline iteration attempts
+max_evidence_iterations = 2     # Maximum evidence补充 attempts
 max_researcher_iterations = 3   # Maximum search iterations per researcher
-enable_review = False           # Enable/disable review step (default: disabled)
+enable_review = False           # Keep disabled - Orchestrator performs real-time quality checks
 ```
 
-When `enable_review=False` (default), the workflow skips the review step to reduce iteration overhead. Outline goes directly to report writing.
+**Note**: The `enable_review` flag is kept as `False` because the Orchestrator now performs **real-time quality checks** at each stage, eliminating the need for a separate review sub-agent.
 
 ## Architecture
 
-### Multi-Agent Workflow
+### Multi-Agent Workflow with Real-Time Quality Control
 
-The system uses an Orchestrator pattern with 6 specialized sub-agents:
+The system uses an **Intelligent Orchestrator** pattern with 5 specialized sub-agents and **real-time quality checks**:
 
 ```
-                    ┌─→ evidence (parallel) ──┐
-                    │                          │
-                    └─→ exploration (parallel) ┘
-                                │
-                                ↓
-                        data-analysis
-                                │
-                                ↓
-                            outline
-                                │
-                                ↓ (if enable_review=True)
-                            review ←──┐
-                                │      │ (max 3 iterations)
-                                └──────┘
-                                │
-                                ↓
-                            write
-                                │
-                                ↓
-                        final_report.md
+┌─→ evidence (parallel) ──┐
+│                          │
+└─→ exploration (parallel) ┘
+            │
+            ↓
+    [Orchestrator Quality Check] ←─┐
+            │                      │
+            ↓ (if insufficient)    │
+    [补充搜索 evidence] ───────────┘
+            │
+            ↓
+    data-analysis
+            │
+            ↓
+    [Orchestrator Quality Check]
+            │
+            ↓
+        outline
+            │
+            ↓
+    [Orchestrator Quality Check] ←──┐
+            │                       │
+            ↓ (if issues found)     │
+    [根据问题类型选择修复策略]      │
+            │                       │
+    ┌───────┼───────┐               │
+    │       │       │               │
+    ↓       ↓       ↓               │
+structure  fab-  incom-             │
+problems   rication pleteness       │
+    │       │       │               │
+    └───────┴───────┴───────────────┘
+            │
+            ↓
+        write
+            │
+            ↓
+    final_report.md
 ```
+
+**Key Innovation**: Closed-loop control with real-time quality checks at every stage.
+
+### Orchestrator as Intelligent Manager
+
+The Orchestrator is not just a coordinator but an **intelligent manager** that:
+
+1. **Real-Time Quality Assessment** - Evaluates output quality after each stage using `read_file` + `think_tool`
+2. **Problem Diagnosis** - Identifies specific issue types:
+   - `structure` - Outline structure problems
+   - `underutilization` - Evidence not fully utilized
+   - `fabrication` - Content without evidence support
+   - `incompleteness` - Missing important aspects
+3. **Strategic Decision Making** - Chooses appropriate repair strategy:
+   - Supplementary search (回到 evidence)
+   - Regenerate outline
+   - Fix fabrication
+   - Expand outline
+4. **Dynamic Adjustment** - Can return to previous stages (e.g., from outline back to evidence)
+5. **Iteration Tracking** - Prevents infinite loops with iteration limits
 
 ### Sub-Agent Responsibilities
 
-- **Orchestrator**: Coordinates workflow, calls sub-agents via `task()` tool
+- **Orchestrator**: Intelligent manager that coordinates workflow, performs real-time quality checks, and makes strategic decisions
 - **evidence**: Web search and information retrieval (uses Tavily)
 - **exploration**: Generates innovative insights and novel perspectives
 - **data-analysis**: Synthesizes and categorizes research findings
 - **outline**: Creates structured report outline
-- **review**: Validates outline-evidence consistency (optional, disabled by default)
 - **write**: Generates final report with proper citations
 
-### Context Passing
+**Note**: The independent `review` sub-agent has been removed. The Orchestrator now performs real-time quality checks, which is more efficient and enables earlier problem detection.
 
-Agents communicate through filesystem:
+### Context Passing and Quality Control
+
+Agents communicate through filesystem with real-time quality gates:
 1. Orchestrator calls sub-agent via `task()`
-2. Sub-agent writes results to files (e.g., `/evidence/search_results.md`)
-3. Downstream agents read via `read_file` tool
-4. All outputs stored in `research_agent/` directory
+2. Sub-agent writes results to files
+3. **Orchestrator immediately reads and evaluates quality** (new!)
+4. If quality is insufficient:
+   - Diagnose problem type
+   - Choose repair strategy
+   - May return to previous stage (e.g., evidence补充)
+5. All outputs stored in `research_agent/` directory
+
+### Advantages of Real-Time Quality Control
+
+- ✅ **Earlier Problem Detection**: Issues found at evidence stage, not after outline
+- ✅ **Flexible Adjustment**: Can return to any previous stage
+- ✅ **Higher Quality**: Layer-by-layer quality gates ensure better reports
+- ✅ **Reduced Cost**: Eliminates separate review sub-agent call (-15-20% API calls)
+- ✅ **Closed-Loop Control**: Continuous feedback and improvement
 
 ## Development Commands
 
